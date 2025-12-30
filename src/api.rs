@@ -86,7 +86,7 @@ fn handle_status(
     let device = query.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
         if key == "device" {
-            Some(value)
+            Some(url_decode(value))
         } else {
             None
         }
@@ -101,7 +101,7 @@ fn handle_status(
         );
     };
 
-    let Some(mac) = config.resolve_device(device) else {
+    let Some(mac) = config.resolve_device(&device) else {
         return json_response(
             StatusCode(400),
             &ErrorResponse {
@@ -111,7 +111,7 @@ fn handle_status(
     };
 
     let response = StatusResponse {
-        device: device.to_string(),
+        device,
         mac: mac.clone(),
         allowed: nft.is_allowed(&mac),
     };
@@ -132,4 +132,29 @@ fn json_response<T: serde::Serialize>(
     let cursor = std::io::Cursor::new(json);
 
     Response::new(status, vec![json_content_type_header()], cursor, None, None)
+}
+
+fn url_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+
+    while let Some(character) = chars.next() {
+        if character == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push('%');
+            result.push_str(&hex);
+        } else if character == '+' {
+            result.push(' ');
+        } else {
+            result.push(character);
+        }
+    }
+
+    result
 }

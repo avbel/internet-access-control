@@ -14,15 +14,16 @@ unwrap_used = "warn"
 expect_used = "warn"
 
 [dependencies]
-tiny_http = "0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-clap = { version = "4", features = ["derive"] }
+tiny_http = { version = "0.12", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+serde_yaml = { version = "0.9", default-features = false }
+clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = true
+strip = "symbols"
+overflow-checks = false

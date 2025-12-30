@@ -153,12 +153,23 @@ struct AppState {
 ### Cargo.toml - Release Profile (minimize binary size)
 ```toml
 [profile.release]
-opt-level = "z"          # Optimize for size
-lto = true               # Link-time optimization
-codegen-units = 1        # Single codegen unit for better optimization
-panic = "abort"          # No unwinding, smaller binary
-strip = true             # Strip symbols
+opt-level = "z"              # Optimize for size (smallest)
+lto = "fat"                  # Aggressive link-time optimization
+codegen-units = 1            # Single codegen unit for better optimization
+panic = "abort"              # No unwinding, smaller binary
+strip = "symbols"            # Strip debug symbols
+overflow-checks = false      # Disable runtime overflow checks
+
+[dependencies]
+# Disable default features to reduce binary size
+tiny_http = { version = "0.12", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+serde_yaml = { version = "0.9", default-features = false }
+clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 ```
+
+**Binary size**: ~722KB (macOS build), significantly smaller on Linux musl builds
 
 ### Cross-compile
 ```bash
@@ -171,3 +182,85 @@ Target depends on router architecture (e.g., `aarch64-unknown-linux-musl`, `mips
 # If strip not enough, use upx compression
 upx --best --lzma target/<target>/release/internet-access-control
 ```
+
+## OpenWRT Installation
+
+### 1. Copy files to router
+```bash
+# Copy binary
+scp target/aarch64-unknown-linux-musl/release/internet-access-control root@router:/usr/bin/
+ssh root@router chmod +x /usr/bin/internet-access-control
+
+# Copy init script
+scp internet-access-control.init root@router:/etc/init.d/internet-access-control
+ssh root@router chmod +x /etc/init.d/internet-access-control
+
+# Copy config file (optional)
+scp internet-access-control.yml root@router:/etc/internet-access-control.yml
+```
+
+### 2. Enable and start service
+```bash
+ssh root@router "/etc/init.d/internet-access-control enable"
+ssh root@router "/etc/init.d/internet-access-control start"
+```
+
+### 3. Service management
+```bash
+# Start service
+/etc/init.d/internet-access-control start
+
+# Stop service
+/etc/init.d/internet-access-control stop
+
+# Restart service
+/etc/init.d/internet-access-control restart
+
+# Check if running
+ps | grep internet-access-control
+
+# View logs
+logread | grep internet-access-control
+```
+
+### 4. Configuration
+Edit `/etc/internet-access-control.yml` to add device aliases:
+```yaml
+devices:
+  phone: "AA:BB:CC:DD:EE:01"
+  laptop: "AA:BB:CC:DD:EE:02"
+  tablet: "AA:BB:CC:DD:EE:03"
+```
+
+After editing, restart the service:
+```bash
+/etc/init.d/internet-access-control restart
+```
+
+## Implementation Changes (2025-12-30)
+
+### 1. Fixed nftables family (bridge → inet)
+**Issue**: Original implementation used `bridge` family, causing "No such file or directory" errors.
+**Fix**: Changed all nftables commands to use `inet` family as specified in the plan.
+**Files**: `src/nftables.rs`
+
+### 2. Fixed handle extraction from nftables output
+**Issue**: nftables outputs handles in format `# handle 2`, but parser expected `# 2` or `handle 2`.
+**Fix**: Modified `extract_handle()` to only search for the word "handle" and parse the following token.
+**Files**: `src/nftables.rs:125-139`
+
+### 3. Prevent duplicate deny rules
+**Issue**: Multiple deny rules could be created for the same MAC address.
+**Fix**: Added `find_all_rule_handles()` function and modified `deny()` to remove all existing rules for a MAC before adding a new one.
+**Files**: `src/nftables.rs:24-51, 84-109`
+
+### 4. Added URL decoding for query parameters
+**Issue**: `/status?device=42%3AF4%3A20%3AFD%3A61%3A68` failed because MAC addresses in URLs are percent-encoded.
+**Fix**: Created `url_decode()` function to decode query parameter values (handles `%XX` encoding and `+` for spaces).
+**Files**: `src/api.rs:89, 137-160`
+
+### 5. Clean state on startup
+**Issue**: Orphaned deny rules from previous runs could persist after application restart.
+**Fix**: Delete the entire nftables table on startup before recreating it, ensuring a clean state.
+**Files**: `src/nftables.rs:81-95`
+**Behavior**: All devices have internet access when the application starts.
