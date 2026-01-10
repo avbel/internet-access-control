@@ -24,3 +24,14 @@ pub struct StatusResponse {
 pub struct ErrorResponse {
     pub error: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct AliasEntry {
+    pub alias: String,
+    pub mac: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AliasesResponse {
+    pub aliases: Vec<AliasEntry>,
+}

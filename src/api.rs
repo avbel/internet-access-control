@@ -2,7 +2,9 @@ use tiny_http::{Header, Request, Response, StatusCode};
 
 use crate::config::Config;
 use crate::nftables::NftManager;
-use crate::types::{Action, ErrorResponse, RuleRequest, StatusResponse};
+use crate::types::{
+    Action, AliasEntry, AliasesResponse, ErrorResponse, RuleRequest, StatusResponse,
+};
 
 pub fn handle_request(
     request: &mut Request,
@@ -14,6 +16,7 @@ pub fn handle_request(
     match (request.method().as_str(), path) {
         ("POST", "/rule") => handle_rule(request, config, nft),
         ("GET", "/status") => handle_status(request, config, nft),
+        ("GET", "/aliases") => handle_aliases(config),
         _ => json_response(
             StatusCode(404),
             &ErrorResponse {
@@ -115,6 +118,23 @@ fn handle_status(
         mac: mac.clone(),
         allowed: nft.is_allowed(&mac),
     };
+
+    json_response(StatusCode(200), &response)
+}
+
+fn handle_aliases(config: &Config) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut aliases: Vec<AliasEntry> = config
+        .devices
+        .iter()
+        .map(|(alias, mac)| AliasEntry {
+            alias: alias.clone(),
+            mac: mac.to_uppercase(),
+        })
+        .collect();
+
+    aliases.sort_by(|a, b| a.alias.cmp(&b.alias));
+
+    let response = AliasesResponse { aliases };
 
     json_response(StatusCode(200), &response)
 }

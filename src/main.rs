@@ -35,6 +35,14 @@ struct Args {
     #[arg(
         short,
         long,
+        default_value = "br-lan",
+        help = "LAN bridge interface name for forwarding rules"
+    )]
+    lan_bridge: String,
+
+    #[arg(
+        short,
+        long,
         default_value = "0.0.0.0",
         help = "Address to bind HTTP server"
     )]
@@ -48,7 +56,7 @@ fn main() {
 
     eprintln!("Loaded {} device aliases", config.devices.len());
 
-    let mut nft = match NftManager::new(&args.wan_interface) {
+    let mut nft = match NftManager::new(&args.wan_interface, &args.lan_bridge) {
         Ok(nft) => nft,
         Err(error) => {
             eprintln!("Failed to initialize nftables: {error}");
@@ -68,6 +76,7 @@ fn main() {
 
     eprintln!("Listening on http://{address}");
     eprintln!("WAN interface: {}", args.wan_interface);
+    eprintln!("LAN bridge: {}", args.lan_bridge);
 
     for mut request in server.incoming_requests() {
         let response = api::handle_request(&mut request, &config, &mut nft);
