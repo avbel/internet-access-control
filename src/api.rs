@@ -3,7 +3,8 @@ use tiny_http::{Header, Request, Response, StatusCode};
 use crate::config::Config;
 use crate::nftables::NftManager;
 use crate::types::{
-    Action, AliasEntry, AliasesResponse, ErrorResponse, RuleRequest, StatusResponse,
+    Action, AliasEntry, AliasesResponse, DeviceStatus, DevicesStatusResponse, ErrorResponse,
+    RuleRequest, StatusResponse,
 };
 
 pub fn handle_request(
@@ -17,6 +18,7 @@ pub fn handle_request(
         ("POST", "/rule") => handle_rule(request, config, nft),
         ("GET", "/status") => handle_status(request, config, nft),
         ("GET", "/aliases") => handle_aliases(config),
+        ("GET", "/statuses") => handle_statuses(config, nft),
         _ => json_response(
             StatusCode(404),
             &ErrorResponse {
@@ -137,6 +139,25 @@ fn handle_aliases(config: &Config) -> Response<std::io::Cursor<Vec<u8>>> {
     let response = AliasesResponse { aliases };
 
     json_response(StatusCode(200), &response)
+}
+
+fn handle_statuses(config: &Config, nft: &NftManager) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut devices: Vec<DeviceStatus> = config
+        .devices
+        .iter()
+        .map(|(alias, mac)| {
+            let mac_upper = mac.to_uppercase();
+            DeviceStatus {
+                alias: alias.clone(),
+                mac: mac_upper.clone(),
+                allowed: nft.is_allowed(&mac_upper),
+            }
+        })
+        .collect();
+
+    devices.sort_by(|a, b| a.alias.cmp(&b.alias));
+
+    json_response(StatusCode(200), &DevicesStatusResponse { devices })
 }
 
 fn json_content_type_header() -> Header {

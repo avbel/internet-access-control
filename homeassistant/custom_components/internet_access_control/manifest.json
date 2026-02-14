@@ -1,0 +1,10 @@
+{
+  "domain": "internet_access_control",
+  "name": "Internet Access Control",
+  "version": "1.0.0",
+  "documentation": "https://github.com/example/internet-access-control",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [],
+  "iot_class": "local_polling"
+}

@@ -35,3 +35,15 @@ pub struct AliasEntry {
 pub struct AliasesResponse {
     pub aliases: Vec<AliasEntry>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DeviceStatus {
+    pub alias: String,
+    pub mac: String,
+    pub allowed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DevicesStatusResponse {
+    pub devices: Vec<DeviceStatus>,
+}

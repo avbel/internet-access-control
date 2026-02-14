@@ -1,0 +1,3 @@
+DOMAIN = 'internet_access_control'
+DEFAULT_PORT = 9080
+DEFAULT_SCAN_INTERVAL = 30
