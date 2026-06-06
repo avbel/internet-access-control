@@ -49,6 +49,7 @@ jobs:
             exit 1
           fi
 
+          export RELEASE_VERSION="${version}"
           echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
           perl -0pi -e 's/^version = "[^"]+"/version = "$ENV{RELEASE_VERSION}"/m' Cargo.toml
           cargo metadata --format-version 1 --no-deps > /dev/null
