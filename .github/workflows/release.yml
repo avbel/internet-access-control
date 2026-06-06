@@ -37,6 +37,12 @@ jobs:
         with:
           tool: cross
 
+      - name: Install nightly Rust for mipsel std build
+        if: matrix.target == 'mipsel-unknown-linux-musl'
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
       - name: Set package version from tag
         shell: bash
         run: |
@@ -55,7 +61,15 @@ jobs:
           cargo metadata --format-version 1 --no-deps > /dev/null
 
       - name: Build release binary
-        run: cross build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ matrix.target }}" == "mipsel-unknown-linux-musl" ]]; then
+            cross +nightly build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
+          else
+            cross build --release --target ${{ matrix.target }}
+          fi
 
       - name: Package release archive
         shell: bash
