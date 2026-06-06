@@ -11,6 +11,7 @@ use nftables::NftManager;
 
 #[derive(Parser)]
 #[command(name = "internet-access-control")]
+#[command(version)]
 #[command(about = "Control internet access for network devices via nftables")]
 struct Args {
     #[arg(
@@ -84,5 +85,19 @@ fn main() {
         if let Err(error) = request.respond(response) {
             eprintln!("Failed to send response: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    #[test]
+    fn command_exposes_package_version() {
+        let command = Args::command();
+
+        assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
     }
 }
