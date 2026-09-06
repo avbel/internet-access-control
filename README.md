@@ -37,18 +37,93 @@ the smart-home gear offline. The device just loses the *outside world* — the *
 
 #### How it works (briefly)
 
-Blocking installs two `nftables` rules in the `forward` chain for the device's MAC:
+Denied MAC addresses live in a named `nftables` set, so blocking or unblocking a device is a single
+set update that takes effect on the very next packet:
 
 ```nft
-# Block traffic leaving toward the internet (WAN)
-oifname "wan"    ether saddr AA:BB:CC:DD:EE:01 drop
-# Block traffic that has to be *routed* off the LAN bridge
-iifname "br-lan" ether saddr AA:BB:CC:DD:EE:01 drop
+table inet access_control {
+	set denied {
+		type ether_addr
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+
+		# a device that was allowed again releases its tagged connections
+		ct mark 0x80000000/1 iifname "br-lan" ether saddr != @denied ct mark set ct mark & 0x7fffffff
+
+		# traffic leaving toward the internet (WAN) …
+		oifname "wan"    ether saddr @denied meta l4proto tcp ct mark set ct mark | 0x80000000 reject with tcp reset
+		oifname "wan"    ether saddr @denied                  ct mark set ct mark | 0x80000000 reject with icmpx admin-prohibited
+		# … and traffic that has to be *routed* off the LAN bridge
+		iifname "br-lan" ether saddr @denied meta l4proto tcp ct mark set ct mark | 0x80000000 reject with tcp reset
+		iifname "br-lan" ether saddr @denied                  ct mark set ct mark | 0x80000000 reject with icmpx admin-prohibited
+
+		# return traffic of a tagged connection never reaches the device
+		ct mark 0x80000000/1 drop
+	}
+}
 ```
 
 Same-subnet LAN traffic (device → NAS, device → TV) is **switched at Layer 2 by the bridge** and
 never enters the routed `forward` path — so it is untouched. Only traffic that needs **routing**
-(i.e. the internet and other subnets) gets dropped. Allowing a device simply removes both rules.
+(i.e. the internet and other subnets) is blocked.
+
+### ⚡ Blocking kills connections that are already open
+
+Silently dropping packets is not enough. A game or a download that is **already running** just keeps
+retransmitting into the void, so a kid mid-Roblox-session can stay in the game for minutes after you
+flip the switch. Blocking therefore does two things at once:
+
+1. **Rejects instead of drops** — TCP gets a reset, everything else gets ICMP/ICMPv6
+   *admin-prohibited*, so the device's sockets fail immediately instead of hanging.
+2. **Tags the connection** (`ct mark`) — packets coming back from the internet carry no device MAC,
+   so the tag is what lets the router cut the *server → device* half of connections that are already
+   established. Without it a game server would happily keep streaming to the device.
+
+Measured on a simulated router (device ─ `br-lan` ─ router ─ `wan` ─ server) while blocking a device
+that had a live TCP session and a UDP game stream running:
+
+|                                     | plain `drop`          | this service         |
+| ----------------------------------- | --------------------- | -------------------- |
+| TCP session                         | still alive after 9 s | **dead after 0.3 s** |
+| inbound game packets after blocking | 532 packets over 7 s  | **1 packet, 0.02 s** |
+| local LAN peer and router           | reachable             | reachable            |
+
+Allowing the device again clears the tag on its next packet, so anything still open recovers on its
+own.
+
+#### Routers that accelerate traffic in hardware
+
+Qualcomm **NSS** builds — anything shipping `qca-nss-ecm`, common on `qualcommax`/ipq807x — hand
+established connections to the **ECM** front end, which forwards them in hardware and never shows
+them to netfilter. Conntrack byte counters keep climbing, but no firewall rule ever sees a packet, so
+a block would only stop *new* connections while the running game or stream sails on. That is exactly
+the problem this feature exists to solve, and no nftables rule can fix it.
+
+ECM exposes a single teardown trigger, so blocking a device writes to it right after the rule is in
+place:
+
+```
+/sys/kernel/debug/ecm/ecm_db/defunct_all
+```
+
+Every accelerated connection drops back onto the Linux slow path, where the deny rules apply.
+Devices that are *not* blocked keep their connections and simply re-accelerate a second later. The
+service detects the trigger at startup and logs that it will use it; on stock builds the file does
+not exist and nothing happens.
+
+Measured on the real hardware — a **Redmi AX6** (`qualcommax/ipq807x`, OpenWRT 24.10.4, kernel
+6.6.110, nftables 1.1.1) — blocking a TV in the middle of a YouTube stream:
+
+|                                     | plain `drop`             | this service            |
+| ----------------------------------- | ------------------------ | ----------------------- |
+| accelerated connections (ECM)       | 424, never touched       | 424 → 3, torn down      |
+| TV traffic in the 10 s after blocking | kept streaming (+327 KB) | **0 bytes**             |
+| the TV's open connections           | stayed established       | reset (conntrack 7400 s → 3 s) |
+| every other device on the LAN       | unaffected               | unaffected              |
+
+Re-allowing the TV brought it straight back: new connections within a second, no stale tags.
 
 ---
 
@@ -59,6 +134,8 @@ never enters the routed `forward` path — so it is untouched. Only traffic that
 - 🔌 **Simple HTTP/JSON API** — allow, deny, and query device status
 - 🏷️ **Friendly aliases** — address devices by name instead of memorizing MAC addresses (YAML config)
 - 🌐 **Internet-only blocking** — the killer feature above; local network access is preserved
+- ⛔ **Instant cut-off** — blocking terminates connections that are *already open* (TCP reset, ICMP
+  admin-prohibited, and the return path severed) instead of leaving them to time out
 - 🔄 **Dual-stack** — uses the `inet` family, so both IPv4 and IPv6 are covered
 - 🧹 **Clean state on startup** — all devices start with internet access; no stale rules survive a restart
 - 🏡 **Home Assistant integration** — exposes each device as a toggle switch (see below)
@@ -253,6 +330,21 @@ internet-access-control.yml    # Example alias config
 - Runs as **root** on the router (needs `nft` privileges).
 - The default-accept policy means **a device has internet unless explicitly denied** — and all
   denials are cleared on restart, so a reboot never leaves anyone locked out by accident.
+- **Flow offloading** (software or hardware) makes established connections bypass the `forward`
+  chain entirely, so a block would only take hold once the offloaded flow expires. The service
+  detects this at startup and logs a warning; turn it off with
+  `uci set firewall.@defaults[0].flow_offloading='0' && uci commit firewall && service firewall restart`.
+- The connection tag needs `CONFIG_NF_CONNTRACK_MARK`, which `kmod-nf-conntrack` forces on — so it is
+  present on every OpenWRT image that has `firewall4`. Verified on **OpenWRT 24.10.4** (nftables
+  1.1.1, kernel 6.6.110) on a Redmi AX6 (`qualcommax/ipq807x`).
+- Stopping the service leaves its table behind — `Drop` does not run when procd sends `SIGTERM`. The
+  next start deletes and rebuilds the table, so this is cosmetic, but `nft list table inet
+  access_control` after a stop shows a stale (rule-free) table.
+- `--wan-interface` must name the **kernel** device, not the UCI interface. On a plain DHCP or static
+  WAN that is `wan`; on **PPPoE** it is `pppoe-wan`. Blocking still works either way (the `br-lan`
+  rule catches everything that has to be routed), but getting it right keeps the rules meaningful.
+- The kill tag uses the top bit of the connection mark (`0x80000000`) and preserves every other bit,
+  so it does not disturb marks used by mwan3, SQM or policy routing.
 - Built and used on a home OpenWRT setup; it's intentionally minimal rather than a full-blown
   parental-control suite.
 

@@ -79,6 +79,21 @@ fn main() {
     eprintln!("WAN interface: {}", args.wan_interface);
     eprintln!("LAN bridge: {}", args.lan_bridge);
 
+    if nftables::hardware_acceleration_present() {
+        eprintln!(
+            "NSS/ECM hardware acceleration detected: accelerated connections will be dropped back \
+             to the slow path on each deny, so blocking also cuts established connections"
+        );
+    }
+
+    if nftables::flow_offload_enabled() {
+        eprintln!(
+            "Warning: flow offloading is enabled. Offloaded connections skip the forward chain, \
+             so blocking a device will not cut its established connections until they expire. \
+             Disable it with: uci set firewall.@defaults[0].flow_offloading='0'"
+        );
+    }
+
     for mut request in server.incoming_requests() {
         let response = api::handle_request(&mut request, &config, &mut nft);
 
